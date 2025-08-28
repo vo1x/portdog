@@ -3,7 +3,7 @@
 `portdog` is a cross-platform process management utility built with Rust that helps you manage network port usage. It provides the following capabilities:
 
 - Find processes owning specific ports
-- Kill processes using designated ports (WIP)
+- Kill processes using designated ports
 - Discover available ports within a specified range (WIP)
 - Support for filtering by TCP and UDP protocols
 
