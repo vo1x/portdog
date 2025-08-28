@@ -1,0 +1,107 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']  
+
+permissions:
+  contents: write  
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            archive: tar.gz
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            archive: tar.gz
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            archive: tar.gz
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            archive: zip
+
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (stable + target)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build (release)
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Strip binary (best-effort)
+        if: runner.os != 'Windows'
+        run: |
+          BIN="target/${{ matrix.target }}/release/portdog"
+          if command -v strip >/dev/null 2>&1; then strip "$BIN" || true; fi
+
+      - name: Package (tar.gz)
+        if: matrix.archive == 'tar.gz'
+        env:
+          TAG: ${{ github.ref_name }}  
+          BIN_NAME: portdog
+        run: |
+          NAME="${BIN_NAME}-${TAG}-${{ matrix.target }}"
+          mkdir -p "dist/$NAME"
+          cp "target/${{ matrix.target }}/release/${BIN_NAME}" "dist/$NAME/"
+          [ -f README.md ] && cp README.md "dist/$NAME/"
+          [ -f LICENSE ] && cp LICENSE "dist/$NAME/"
+          tar -C dist -czf "dist/${NAME}.tar.gz" "$NAME"
+          echo "ASSET=dist/${NAME}.tar.gz" >> "$GITHUB_ENV"
+
+      - name: Package (zip)
+        if: matrix.archive == 'zip'
+        shell: pwsh
+        env:
+          TAG: ${{ github.ref_name }}
+          BIN_NAME: portdog
+        run: |
+          $Name = "$env:BIN_NAME-$env:TAG-${{ matrix.target }}"
+          New-Item -ItemType Directory -Path "dist/$Name" | Out-Null
+          Copy-Item "target/${{ matrix.target }}/release/${env:BIN_NAME}.exe" "dist/$Name/"
+          if (Test-Path README.md) { Copy-Item README.md "dist/$Name/" }
+          if (Test-Path LICENSE)   { Copy-Item LICENSE   "dist/$Name/" }
+          Compress-Archive -Path "dist/$Name/*" -DestinationPath "dist/$Name.zip" -Force
+          echo "ASSET=dist/$Name.zip" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}
+          path: ${{ env.ASSET }}
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: Checksums
+        run: |
+          cd dist
+          # compute checksums for both tar.gz and zip
+          find . -type f \( -name '*.tar.gz' -o -name '*.zip' \) -print0 | xargs -0 sha256sum > SHA256SUMS
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/**/*.tar.gz
+            dist/**/*.zip
+            dist/SHA256SUMS
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
