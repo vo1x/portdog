@@ -211,6 +211,6 @@ fn kill_pid(pid: u32, force: bool) -> Result<(), Box<dyn Error>> {
     if status.success() {
         Ok(())
     } else {
-        Err("taskkill failed".into());
+        Err("taskkill failed".into())
     }
 }
