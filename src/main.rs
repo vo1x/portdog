@@ -11,7 +11,16 @@ use std::error::Error;
 use std::collections::HashSet;
 
 #[derive(Parser)]
-#[command(name = "portdog", version, about = "Ports & processes helper")]
+#[command(
+    name = "portdog",
+    version,
+    about = "Ports & processes helper",
+    long_about = "A tiny CLI to find and free ports (who owns a port, and kill by port).",
+    arg_required_else_help = true,
+    disable_help_subcommand = false,
+    propagate_version = true,
+    after_help = "Examples:\n  portdog who 8080\n  portdog kill 8080 --force"
+)]
 struct Cli {
     #[command(subcommand)]
     cmd: Command,
@@ -19,13 +28,25 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    #[command(
+        about = "Show PIDs/process names bound to a local port",
+        long_about = "Scans IPv4/IPv6 sockets for the given local port and prints owning PIDs and process info.",
+        after_help = "Examples:\n  portdog who 3000\n  portdog who 5432 --proto tcp"
+    )]
     Who {
         port: u16,
         #[arg(long, value_enum, default_value_t = Proto::Any)]
         proto: Proto,
     },
+     #[command(
+        about = "Stop the process(es) occupying a local port",
+        long_about = "Sends SIGTERM on Unix (or uses taskkill on Windows) to processes bound to the given local port.\nUse --force for SIGKILL (Unix) or /F (Windows).",
+        after_help = "Examples:\n  portdog kill 3000\n  portdog kill 8080 --force"
+    )]
     Kill {
         port: u16,
+        #[arg(long)]
+        force: bool,
     },
 }
 
@@ -40,7 +61,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
     match cli.cmd {
         Command::Who { port, proto } => who(port, proto)?,
-        Command::Kill { port } => kill_port(port)?,
+        Command::Kill { port, force } => kill_port(port, force)?,
     }
     Ok(())
 }
@@ -112,10 +133,10 @@ fn print_line(proto: &str, port: u16, state: Option<String>, pids: &[u32], sys: 
     }
 }
 
-fn kill_port(port: u16) -> Result<(), Box<dyn Error>> {
+fn kill_port(port: u16, force: bool) -> Result<(), Box<dyn Error>> {
     let pids = collect_pids_for_port(port)?;
     if pids.is_empty() {
-        println!("No process is using port: {port}");
+        eprintln!("No process is using port: {port}");
         return Ok(());
     }
 
@@ -123,10 +144,13 @@ fn kill_port(port: u16) -> Result<(), Box<dyn Error>> {
 
     let mut failures = Vec::new();
     for pid in pids {
-        if let Err(e) = kill_pid(pid) {
+        if let Err(e) = kill_pid(pid, force) {
             failures.push((pid, e.to_string()));
         } else {
-            println!("Stopped PID {pid}");
+            println!(
+                "{} PID {pid}",
+                if force { "force-stopped" } else { "stopped" }
+            );
         }
     }
 
@@ -160,19 +184,30 @@ fn collect_pids_for_port(port: u16) -> Result<Vec<u32>, Box<dyn Error>> {
 }
 
 #[cfg(unix)]
-fn kill_pid(pid: u32) -> Result<(), Box<dyn Error>> {
-    use nix::sys::signal::{Signal::SIGTERM, kill};
+fn kill_pid(pid: u32, force: bool) -> Result<(), Box<dyn Error>> {
+    use nix::sys::signal::{
+        Signal::{SIGKILL, SIGTERM},
+        kill,
+    };
     use nix::unistd::Pid as UnixPid;
-    kill(UnixPid::from_raw(pid as i32), SIGTERM)?;
+
+    let signal = if force { SIGKILL } else { SIGTERM };
+    kill(UnixPid::from_raw(pid as i32), signal)?;
     Ok(())
 }
 
 #[cfg(windows)]
-fn kill_pid(pid: u32) -> Result<(), Box<dyn Error>> {
+fn kill_pid(pid: u32, force: bool) -> Result<(), Box<dyn Error>> {
     use std::process::Command as ProcCommand;
-    let status = ProcCommand::new("taskKill")
-        .args(["/PID", &pid.to_string()])
-        .status()?;
+
+    let cmd = ProcCommand::new("taskKill");
+
+    cmd.args(["/PID", &pid.to_string()]);
+    if force {
+        cmd.arg("/F");
+    }
+
+    let status = cmd.status()?;
     if status.success() {
         Ok(())
     } else {
