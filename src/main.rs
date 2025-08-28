@@ -200,7 +200,7 @@ fn kill_pid(pid: u32, force: bool) -> Result<(), Box<dyn Error>> {
 fn kill_pid(pid: u32, force: bool) -> Result<(), Box<dyn Error>> {
     use std::process::Command as ProcCommand;
 
-    let cmd = ProcCommand::new("taskKill");
+    let mut cmd = ProcCommand::new("taskkill");
 
     cmd.args(["/PID", &pid.to_string()]);
     if force {
